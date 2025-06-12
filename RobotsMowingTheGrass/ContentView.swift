@@ -37,6 +37,10 @@ struct ContentView: View {
 
     @State private var currentChatTask: Task<Void, Never>? = nil
 
+    // For streaming support
+    @State private var currentStreamingMessage: ChatMessage?
+    @State private var streamingBuffer: String = ""
+
     var body: some View {
             NavigationSplitView {
                 SettingsPanel(
@@ -55,28 +59,40 @@ struct ContentView: View {
                                 Text("Turn: \(turnNumber)")
                                 Spacer()
                                 Button("Save As") { isSaving = true }
-                                Button("Clear") { messages.removeAll(); turnNumber = 0 }
+                                Button("Clear") {
+                                    messages.removeAll()
+                                    turnNumber = 0
+                                    currentStreamingMessage = nil
+                                    streamingBuffer = ""
+                                }
                                 Button("Cancel") {
                                     currentChatTask?.cancel()
                                     isProcessing = false
                                     status = "Cancelled by user"
                                     currentChatTask = nil
+                                    currentStreamingMessage = nil
+                                    streamingBuffer = ""
                                 }
                                 .disabled(currentChatTask == nil)
                             }.padding([.top, .horizontal])
                     ScrollViewReader { scrollProxy in
                         ScrollView {
                             LazyVStack(alignment: .leading, spacing: 10) {
-                                ForEach(messages) { message in
+                                ForEach(displayMessages) { message in
                                     messageBubble(message)
                                 }
                             }
                             .padding()
                         }
                         .background(Color(NSColor.windowBackgroundColor))
-                        .onChange(of: messages.count) { _ in
-                            if let last = messages.last {
+                        .onChange(of: displayMessages.count) { _ in
+                            if let last = displayMessages.last {
                                 scrollProxy.scrollTo(last.id, anchor: .bottom)
+                            }
+                        }
+                        .onChange(of: streamingBuffer) { _ in
+                            if let current = currentStreamingMessage {
+                                scrollProxy.scrollTo(current.id, anchor: .bottom)
                             }
                         }
                     }
@@ -107,6 +123,41 @@ struct ContentView: View {
                 }
             }
         .frame(minWidth: 500, minHeight: 600)
+    }
+
+    // Computed property to combine permanent messages with streaming message
+    private var displayMessages: [ChatMessage] {
+        var result = messages
+        if let streaming = currentStreamingMessage {
+            let (thinkPart, mainPart) = extractThink(text: streamingBuffer)
+
+            if let thinkPart = thinkPart, !thinkPart.isEmpty {
+                let thinkMessage = ChatMessage(
+                    text: thinkPart,
+                    sender: streaming.sender,
+                    isThink: true
+                )
+                result.append(thinkMessage)
+            }
+
+            if !mainPart.isEmpty {
+                let mainMessage = ChatMessage(
+                    text: mainPart,
+                    sender: streaming.sender,
+                    isThink: false
+                )
+                result.append(mainMessage)
+            } else if thinkPart == nil && !streamingBuffer.isEmpty {
+                // No think tags, just show the streaming content
+                let streamMessage = ChatMessage(
+                    text: streamingBuffer,
+                    sender: streaming.sender,
+                    isThink: false
+                )
+                result.append(streamMessage)
+            }
+        }
+        return result
     }
 
     @ViewBuilder
@@ -185,34 +236,37 @@ struct ContentView: View {
                 // Model A's turn
                 await MainActor.run { status = "Waiting for Model A…" }
                 let promptForModelA = historyString + "\nModel A:"
-                if let responseA = await generateWithOllama(modelName: selectedModelA, prompt: promptForModelA, port: portA) {
-                    let (thinkA, mainA) = extractThink(text: responseA)
-                    if let thinkA = thinkA {
-                        await MainActor.run { messages.append(.init(text: thinkA, sender: .modelA, isThink: true)) }
-                    }
-                    await MainActor.run { messages.append(.init(text: mainA, sender: .modelA, isThink: false)) }
-                    current = mainA
+
+                if let responseA = await generateWithOllamaStreaming(
+                    modelName: selectedModelA,
+                    prompt: promptForModelA,
+                    port: portA,
+                    sender: .modelA
+                ) {
+                    current = responseA
                     lastSender = .modelA
                 } else {
                     await MainActor.run { status = "Model A error!" }
                     break
                 }
             } else {
+                var promptForModelB = current
                 if turnNumber == 2 {
                     // lets tell this guy what initial prompt is
-                    current = firstPrompt + "\n what is your response? :" + current
+                    promptForModelB = firstPrompt + "\n what is your response? :" + current
                 }
 
                 // Model B's turn
                 await MainActor.run { status = "Waiting for Model B…" }
-                let promptForModelB = historyString + "\nModel B:"
-                if let responseB = await generateWithOllama(modelName: selectedModelB, prompt: promptForModelB, port: portB) {
-                    let (thinkB, mainB) = extractThink(text: responseB)
-                    if let thinkB = thinkB {
-                        await MainActor.run { messages.append(.init(text: thinkB, sender: .modelB, isThink: true)) }
-                    }
-                    await MainActor.run { messages.append(.init(text: mainB, sender: .modelB, isThink: false)) }
-                    current = mainB
+                let fullPromptForModelB = historyString + "\nModel B:"
+
+                if let responseB = await generateWithOllamaStreaming(
+                    modelName: selectedModelB,
+                    prompt: fullPromptForModelB,
+                    port: portB,
+                    sender: .modelB
+                ) {
+                    current = responseB
                     lastSender = .modelB
                 } else {
                     await MainActor.run { status = "Model B error!" }
@@ -221,5 +275,65 @@ struct ContentView: View {
             }
         }
         await MainActor.run { status = "" }
+    }
+
+    func generateWithOllamaStreaming(modelName: String, prompt: String, port: Int, sender: ChatMessage.Sender) async -> String? {
+        guard let url = URL(string: "http://127.0.0.1:\(port)/api/generate") else { return nil }
+        if let _ = prompt.range(of: "</think>") {
+            print("wtf")
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        let payload: [String: Any] = [
+            "model": modelName,
+            "prompt": prompt,
+            "stream": true
+        ]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        // Initialize streaming state
+        await MainActor.run {
+            currentStreamingMessage = ChatMessage(text: "", sender: sender, isThink: false)
+            streamingBuffer = ""
+        }
+
+        return await withCheckedContinuation { continuation in
+            let delegate = StreamingDelegate { chunk in
+                Task { @MainActor in
+                    self.streamingBuffer += chunk
+                }
+            } onFinish: {
+                Task { @MainActor in
+//                    guard let self = self else {
+//                        continuation.resume(returning: nil)
+//                        return
+//                    }
+
+                    let finalResponse = self.streamingBuffer
+                    let (thinkPart, mainPart) = extractThink(text: finalResponse)
+
+                    // Add the final messages to permanent storage
+                    if let thinkPart = thinkPart, !thinkPart.isEmpty {
+                        self.messages.append(ChatMessage(text: thinkPart, sender: sender, isThink: true))
+                    }
+
+                    let finalMainPart = mainPart.isEmpty ? finalResponse : mainPart
+                    if !finalMainPart.isEmpty {
+                        self.messages.append(ChatMessage(text: finalMainPart, sender: sender, isThink: false))
+                    }
+
+                    // Clear streaming state
+                    self.currentStreamingMessage = nil
+                    self.streamingBuffer = ""
+
+                    continuation.resume(returning: finalMainPart)
+                }
+            }
+
+            let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+            let task = session.dataTask(with: request)
+            task.resume()
+        }
     }
 }
