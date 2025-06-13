@@ -1,2 +1,5 @@
 *.xcbkptlist
-MowingTheGrass.xcodeproj/xcuserdata/*
+/MowingTheGrass.xcodeproj/xcuserdata/*
+/MowingTheGrass.xcodeproj/xcshareddata
+/MowingTheGrass.xcodeproj/project.xcworkspace/xcuserdata
+/MowingTheGrass.xcodeproj/project.xcworkspace/xcshareddata

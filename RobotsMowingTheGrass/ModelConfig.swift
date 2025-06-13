@@ -1,0 +1,256 @@
+//
+//  ModelConfig.swift
+//  RobotsMowingTheGrass
+//
+//  Created by Gregg Jaskiewicz on 13/06/2025.
+//
+
+import SwiftUI
+import Combine
+
+// MARK: - Array Extension for Safe Access
+extension Array {
+    subscript(safe index: Int) -> Element? {
+        return indices.contains(index) ? self[index] : nil
+    }
+}
+
+// MARK: - Model Configuration
+
+struct ModelConfiguration: Identifiable, Codable, Equatable {
+    let id: UUID
+    var name: String
+    var displayName: String
+    var host: String = "127.0.0.1"
+    var port: Int
+    var modelName: String
+    var bubbleColor: CodableColor
+    var enabled: Bool = true
+
+    init(id: UUID = UUID(),
+         name: String,
+         displayName: String,
+         host: String = "127.0.0.1",
+         port: Int,
+         modelName: String,
+         bubbleColor: CodableColor,
+         enabled: Bool = true)
+    {
+        self.id = id
+        self.name = name
+        self.displayName = displayName
+        self.host = host
+        self.port = port
+        self.modelName = modelName
+        self.bubbleColor = bubbleColor
+        self.enabled = enabled
+    }
+
+    static func makeDefault(index: Int) -> ModelConfiguration {
+        let colors: [Color] = [.green, .orange, .blue, .purple, .pink, .teal]
+        let names = ["A", "B", "C", "D", "E", "F"]
+
+        return ModelConfiguration(
+            name: "Model \(names[index % names.count])",
+            displayName: "Model \(names[index % names.count])",
+            port: 11434 + index,
+            modelName: "",
+            bubbleColor: CodableColor(colors[index % colors.count])
+        )
+    }
+}
+
+// MARK: - Codable Color Support
+
+struct CodableColor: Codable, Equatable {
+    let red: Double
+    let green: Double
+    let blue: Double
+    let opacity: Double
+
+    init(_ color: Color) {
+        // Convert to sRGB color space to avoid crashes with system colors
+        if let cgColor = color.cgColor,
+           let srgbColor = cgColor.converted(to: CGColorSpace(name: CGColorSpace.sRGB)!, intent: .defaultIntent, options: nil) {
+            let components = srgbColor.components ?? [0, 0, 0, 1]
+            self.red = Double(components[safe: 0] ?? 0)
+            self.green = Double(components[safe: 1] ?? 0)
+            self.blue = Double(components[safe: 2] ?? 0)
+            self.opacity = Double(components[safe: 3] ?? 1)
+        } else {
+            // Fallback to a default color if conversion fails
+            self.red = 0.5
+            self.green = 0.5
+            self.blue = 0.5
+            self.opacity = 1.0
+        }
+    }
+
+    init(red: Double, green: Double, blue: Double, opacity: Double = 1.0) {
+        self.red = red
+        self.green = green
+        self.blue = blue
+        self.opacity = opacity
+    }
+
+    var color: Color {
+        Color(red: red, green: green, blue: blue, opacity: opacity)
+    }
+}
+
+// MARK: - Updated ChatMessage
+
+struct ChatMessage: Identifiable, Equatable {
+    let id = UUID()
+    var text: String
+    let senderID: UUID  // References ModelConfiguration.id
+    let senderName: String
+    var isThink: Bool
+    var isStreaming: Bool = false
+
+    var isUser: Bool {
+        senderID == UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+    }
+
+    static func userMessage(text: String) -> ChatMessage {
+        ChatMessage(
+            text: text,
+            senderID: UUID(uuidString: "00000000-0000-0000-0000-000000000000")!,
+            senderName: "User",
+            isThink: false,
+            isStreaming: false
+        )
+    }
+}
+
+// MARK: - Configuration Manager
+
+@MainActor
+class ModelConfigurationManager: ObservableObject {
+    @Published var configurations: [ModelConfiguration] = []
+
+    private let userDefaults = UserDefaults.standard
+    private let configurationsKey = "model_configurations"
+
+    init() {
+        loadConfigurations()
+    }
+
+    func loadConfigurations() {
+        if let data = userDefaults.data(forKey: configurationsKey),
+           let decoded = try? JSONDecoder().decode([ModelConfiguration].self, from: data) {
+            configurations = decoded
+        } else {
+            // Create default configurations
+            configurations = [
+                ModelConfiguration.makeDefault(index: 0),
+                ModelConfiguration.makeDefault(index: 1)
+            ]
+            saveConfigurations()
+        }
+    }
+
+    func saveConfigurations() {
+        if let encoded = try? JSONEncoder().encode(configurations) {
+            userDefaults.set(encoded, forKey: configurationsKey)
+        }
+    }
+
+    func addConfiguration() {
+        let newConfig = ModelConfiguration.makeDefault(index: configurations.count)
+        configurations.append(newConfig)
+        saveConfigurations()
+    }
+
+    func removeConfiguration(at index: Int) {
+        guard configurations.count > 1 else { return } // Keep at least one
+        configurations.remove(at: index)
+        saveConfigurations()
+    }
+
+    func updateConfiguration(_ config: ModelConfiguration) {
+        if let index = configurations.firstIndex(where: { $0.id == config.id }) {
+            configurations[index] = config
+            saveConfigurations()
+        }
+    }
+
+    var enabledConfigurations: [ModelConfiguration] {
+        configurations.filter { $0.enabled && !$0.modelName.isEmpty }
+    }
+}
+
+// MARK: - Updated Chat Service Protocol
+
+protocol ChatServiceProtocol {
+    func generateResponse(
+        configuration: ModelConfiguration,
+        prompt: String,
+        onChunk: @escaping (String) -> Void,
+        onComplete: @escaping (Result<String, Error>) -> Void
+    ) -> Cancellable?
+}
+
+enum Errors: Swift.Error {
+    case invalidURL
+}
+
+// MARK: - Updated Ollama Service
+
+class OllamaChatService: ChatServiceProtocol
+{
+    func generateResponse(
+        configuration: ModelConfiguration,
+        prompt: String,
+        onChunk: @escaping (String) -> Void,
+        onComplete: @escaping (Result<String, Error>) -> Void
+    ) -> Cancellable?
+    {
+        guard let url = URL(string: "http://\(configuration.host):\(configuration.port)/api/generate") else {
+            onComplete(.failure(Errors.invalidURL))
+            return nil
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 300
+
+        let payload: [String: Any] = [
+            "model": configuration.modelName,
+            "prompt": prompt,
+            "stream": true,
+            "options": [
+                "temperature": 0.7,
+                "top_p": 0.9
+            ]
+        ]
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        } catch {
+            onComplete(.failure(error))
+            return nil
+        }
+
+        var accumulatedText = ""
+
+        let delegate = StreamingDelegate(
+            onChunk: { chunk in
+                accumulatedText += chunk
+                onChunk(chunk)
+            },
+            onFinish: {
+                onComplete(.success(accumulatedText))
+            }
+        )
+
+        let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
+        let task = session.dataTask(with: request)
+        task.resume()
+
+        return AnyCancellable {
+            task.cancel()
+        }
+    }
+}

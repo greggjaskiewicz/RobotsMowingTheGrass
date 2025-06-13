@@ -1,0 +1,294 @@
+import SwiftUI
+import Combine
+
+@MainActor
+class ChatViewModel: ObservableObject {
+    // Published properties
+    @Published var messages: [ChatMessage] = []
+    @Published var isProcessing = false
+    @Published var status = ""
+    @Published var turnNumber = 0
+
+    // Settings
+    @AppStorage("maxTurns") private var maxTurns: Int = 8
+    @AppStorage("infiniteTurns") private var infinite: Bool = false
+    @AppStorage("contextTurns") private var contextTurns: Int = 12
+
+    // Services
+    private let chatService: ChatServiceProtocol
+    var configManager: ModelConfigurationManager
+    private var currentTask: Task<Void, Never>?
+    private var streamingCancellable: Cancellable?
+
+    // Streaming state
+    private var streamingMessageIndex: Int?
+    private var currentModelIndex = 0
+
+    init(
+        chatService: ChatServiceProtocol = OllamaChatService(),
+        configManager: ModelConfigurationManager
+    ) {
+        self.chatService = chatService
+        self.configManager = configManager
+    }
+
+    // MARK: - Public Methods
+
+    func sendUserMessage(_ text: String) {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return }
+
+        let enabledModels = configManager.enabledConfigurations
+        guard !enabledModels.isEmpty else {
+            status = "No models configured"
+            return
+        }
+
+        messages.append(ChatMessage.userMessage(text: trimmed))
+        isProcessing = true
+        status = "Starting conversation…"
+        currentModelIndex = 0
+
+        currentTask = Task {
+            await runDialogueLoop(firstPrompt: trimmed, models: enabledModels)
+            isProcessing = false
+            status = ""
+        }
+    }
+
+    func clear() {
+        messages.removeAll()
+        turnNumber = 0
+        currentModelIndex = 0
+        cancelCurrentOperation()
+        status = ""
+    }
+
+    func cancel() {
+        cancelCurrentOperation()
+    }
+
+    var displayMessages: [ChatMessage] {
+        messages.flatMap { message in
+            if message.isStreaming {
+                return parseStreamingMessage(message)
+            } else {
+                return [message]
+            }
+        }
+    }
+
+    func bubbleColor(for message: ChatMessage) -> Color {
+        if message.isUser {
+            return .accentColor
+        }
+
+        if let config = configManager.configurations.first(where: { $0.id == message.senderID }) {
+            return config.bubbleColor.color.opacity(message.isThink ? 0.15 : 0.1)
+        }
+
+        return Color.gray.opacity(0.1)
+    }
+
+    // MARK: - Private Methods
+
+    private func parseStreamingMessage(_ message: ChatMessage) -> [ChatMessage] {
+        let (thinkPart, mainPart) = extractThink(text: message.text)
+        var result: [ChatMessage] = []
+
+        if let thinkPart = thinkPart, !thinkPart.isEmpty {
+            var thinkMessage = message
+            thinkMessage.text = thinkPart
+            thinkMessage.isThink = true
+            result.append(thinkMessage)
+        }
+
+        if !mainPart.isEmpty {
+            var mainMessage = message
+            mainMessage.text = mainPart
+            mainMessage.isThink = false
+            result.append(mainMessage)
+        } else if thinkPart == nil && !message.text.isEmpty {
+            result.append(message)
+        }
+
+        return result
+    }
+
+    private func cancelCurrentOperation() {
+        streamingCancellable?.cancel()
+        currentTask?.cancel()
+        currentTask = nil
+        streamingMessageIndex = nil
+
+        if isProcessing {
+            isProcessing = false
+            status = "Cancelled by user"
+        }
+    }
+
+    private func runDialogueLoop(firstPrompt: String, models: [ModelConfiguration]) async
+    {
+        var currentPrompt = firstPrompt
+        let turnLimit = infinite ? Int.max : maxTurns
+
+        while turnNumber < turnLimit && !Task.isCancelled
+        {
+            turnNumber += 1
+
+            let contextMessages = Array(messages.suffix(contextTurns))
+            let historyString = buildHistoryString(from: contextMessages)
+
+            // Get next model in round-robin fashion
+            let currentModel = models[currentModelIndex % models.count]
+            currentModelIndex += 1
+
+            status = "\(currentModel.displayName) is thinking…"
+
+            let systemPrompt = buildSystemPrompt(
+                for: currentModel,
+                isFirstResponse: turnNumber == 1,
+                totalModels: models.count,
+                originalPrompt: firstPrompt
+            )
+
+            let fullPrompt = systemPrompt + historyString + "\n\(currentModel.displayName):"
+
+            if let response = await streamResponse(
+                configuration: currentModel,
+                prompt: fullPrompt
+            ) {
+                currentPrompt = response
+            } else {
+                status = "\(currentModel.displayName) error!"
+                break
+            }
+        }
+
+        status = ""
+    }
+
+    private func streamResponse(
+        configuration: ModelConfiguration,
+        prompt: String
+    ) async -> String? {
+        // Create streaming message
+        let streamingMessage = ChatMessage(
+            text: "",
+            senderID: configuration.id,
+            senderName: configuration.displayName,
+            isThink: false,
+            isStreaming: true
+        )
+        messages.append(streamingMessage)
+        streamingMessageIndex = messages.count - 1
+
+        return await withCheckedContinuation { continuation in
+            var accumulatedText = ""
+
+            streamingCancellable = chatService.generateResponse(
+                configuration: configuration,
+                prompt: prompt,
+                onChunk: { [weak self] chunk in
+                    Task { @MainActor [weak self] in
+                        guard let self = self,
+                              let index = self.streamingMessageIndex,
+                              index < self.messages.count else { return }
+
+                        accumulatedText += chunk
+                        self.messages[index].text = accumulatedText
+                    }
+                },
+                onComplete: { [weak self] result in
+                    Task { @MainActor [weak self] in
+                        guard let self = self,
+                              let index = self.streamingMessageIndex else { return }
+
+                        switch result {
+                        case .success(let finalText):
+                            self.finalizeStreamingMessage(
+                                at: index,
+                                with: finalText,
+                                configuration: configuration
+                            )
+                            continuation.resume(returning: finalText)
+                        case .failure:
+                            self.messages.remove(at: index)
+                            continuation.resume(returning: nil)
+                        }
+
+                        self.streamingMessageIndex = nil
+                    }
+                }
+            )
+        }
+    }
+
+    private func finalizeStreamingMessage(
+        at index: Int,
+        with text: String,
+        configuration: ModelConfiguration
+    ) {
+        messages.remove(at: index)
+
+        let (thinkPart, mainPart) = extractThink(text: text)
+
+        if let thinkPart = thinkPart, !thinkPart.isEmpty {
+            messages.insert(ChatMessage(
+                text: thinkPart,
+                senderID: configuration.id,
+                senderName: configuration.displayName,
+                isThink: true,
+                isStreaming: false
+            ), at: index)
+        }
+
+        let finalMainPart = mainPart.isEmpty ? text : mainPart
+        if !finalMainPart.isEmpty {
+            let insertIndex = thinkPart != nil ? index + 1 : index
+            messages.insert(ChatMessage(
+                text: finalMainPart,
+                senderID: configuration.id,
+                senderName: configuration.displayName,
+                isThink: false,
+                isStreaming: false
+            ), at: insertIndex)
+        }
+    }
+
+    private func buildHistoryString(from messages: [ChatMessage]) -> String {
+        messages.map { message in
+            let prefix = message.isThink ? "[Thinking] " : ""
+            return "\(message.senderName): \(prefix)\(message.text)"
+        }.joined(separator: "\n")
+    }
+
+    private func buildSystemPrompt(
+        for model: ModelConfiguration,
+        isFirstResponse: Bool,
+        totalModels: Int,
+        originalPrompt: String
+    ) -> String {
+        guard isFirstResponse || currentModelIndex <= totalModels else { return "" }
+
+        let modelList = configManager.enabledConfigurations
+            .map { $0.displayName }
+            .joined(separator: ", ")
+
+        let basePrompt = """
+        You are \(model.displayName) in a conversation between \(totalModels) AI models (\(modelList)). 
+        You will be discussing topics with the other models, taking turns to respond. 
+        Be thoughtful and engaging in your responses. Keep it super brief!
+        You can use <think></think> tags to show your reasoning process.
+        
+        """
+
+        if isFirstResponse {
+            return basePrompt + "Use the User Prompt as the starting point for your conversation.\n\n"
+        } else if currentModelIndex <= totalModels {
+            return basePrompt + "Original user prompt: \(originalPrompt)\n\n"
+        }
+
+        return ""
+    }
+}

@@ -4,7 +4,6 @@
 //
 //  Created by Gregg Jaskiewicz on 12/06/2025.
 //
-
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -22,7 +21,7 @@ struct ExportChatDocument: FileDocument {
             throw CocoaError(.fileReadCorruptFile)
         }
 
-        if let jsonString = String(data: data, encoding: .utf8),
+        if let _ = String(data: data, encoding: .utf8),
            let exportData = try? JSONDecoder().decode(ChatExportData.self, from: data) {
             self.chatData = exportData
         } else {
@@ -54,27 +53,39 @@ private struct ChatExportData: Codable {
     let metadata: ExportMetadata
 
     init(messages: [ChatMessage]) {
-        self.version = "1.0"
+        self.version = "2.0" // Updated version for new format
         self.exportDate = Date()
         self.messages = messages.map(ExportMessage.init)
+
+        // Count messages by sender
+        var senderCounts: [String: Int] = ["user": 0]
+        var thinkingCount = 0
+
+        for message in messages {
+            if message.isUser {
+                senderCounts["user", default: 0] += 1
+            } else {
+                senderCounts[message.senderName, default: 0] += 1
+            }
+            if message.isThink {
+                thinkingCount += 1
+            }
+        }
+
         self.metadata = ExportMetadata(
             totalMessages: messages.count,
-            userMessages: messages.filter { $0.sender == .user }.count,
-            modelAMessages: messages.filter { $0.sender == .modelA }.count,
-            modelBMessages: messages.filter { $0.sender == .modelB }.count,
-            thinkingMessages: messages.filter { $0.isThink }.count
+            senderCounts: senderCounts,
+            thinkingMessages: thinkingCount
         )
     }
 
     init(plainText: String) {
-        self.version = "1.0"
+        self.version = "2.0"
         self.exportDate = Date()
         self.messages = []
         self.metadata = ExportMetadata(
             totalMessages: 0,
-            userMessages: 0,
-            modelAMessages: 0,
-            modelBMessages: 0,
+            senderCounts: [:],
             thinkingMessages: 0
         )
     }
@@ -88,16 +99,24 @@ private struct ChatExportData: Codable {
             "Chat Export",
             "Generated: \(formatter.string(from: exportDate))",
             "Total Messages: \(metadata.totalMessages)",
-            String(repeating: "=", count: 50),
             ""
         ]
 
+        // Add sender statistics
+        output.append("Participants:")
+        for (sender, count) in metadata.senderCounts.sorted(by: { $0.key < $1.key }) {
+            output.append("  \(sender): \(count) messages")
+        }
+        output.append("  Thinking messages: \(metadata.thinkingMessages)")
+
+        output.append(String(repeating: "=", count: 50))
+        output.append("")
+
         for (index, message) in messages.enumerated() {
             let turnNumber = index + 1
-            let sender = message.sender.displayName
             let prefix = message.isThink ? "[Thinking] " : ""
 
-            output.append("Turn \(turnNumber): \(sender)")
+            output.append("Turn \(turnNumber): \(message.senderName)")
             output.append("\(prefix)\(message.text)")
             output.append("")
         }
@@ -108,44 +127,24 @@ private struct ChatExportData: Codable {
 
 private struct ExportMessage: Codable {
     let text: String
-    let sender: ExportSender
+    let senderID: String
+    let senderName: String
     let isThink: Bool
+    let isUser: Bool
     let timestamp: Date
 
     init(from message: ChatMessage) {
         self.text = message.text
-        self.sender = ExportSender(from: message.sender)
+        self.senderID = message.senderID.uuidString
+        self.senderName = message.senderName
         self.isThink = message.isThink
+        self.isUser = message.isUser
         self.timestamp = Date() // Current timestamp as we don't store original timestamps
     }
 }
 
 private struct ExportMetadata: Codable {
     let totalMessages: Int
-    let userMessages: Int
-    let modelAMessages: Int
-    let modelBMessages: Int
+    let senderCounts: [String: Int]
     let thinkingMessages: Int
-}
-
-private enum ExportSender: String, Codable {
-    case user = "user"
-    case modelA = "model_a"
-    case modelB = "model_b"
-
-    init(from sender: ChatMessage.Sender) {
-        switch sender {
-        case .user: self = .user
-        case .modelA: self = .modelA
-        case .modelB: self = .modelB
-        }
-    }
-
-    var displayName: String {
-        switch self {
-        case .user: return "User"
-        case .modelA: return "Model A"
-        case .modelB: return "Model B"
-        }
-    }
 }
