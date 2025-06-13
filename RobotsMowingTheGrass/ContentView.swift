@@ -8,139 +8,180 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-struct ChatMessage: Identifiable {
+struct ChatMessage: Identifiable
+{
     let id = UUID()
     let text: String
     let sender: Sender
     let isThink: Bool
 
-    enum Sender {
+    enum Sender
+    {
         case user, modelA, modelB
+
+        var displayTitle: String
+        {
+            switch self
+            {
+            case .user: return "User"
+            case .modelA: return "Model A"
+            case .modelB: return "Model B"
+            }
+        }
     }
 }
 
 struct ContentView: View {
-    @AppStorage("portA") var portA: Int = 11434
-    @AppStorage("portB") var portB: Int = 11435
-    @AppStorage("selectedModelA") var selectedModelA: String = ""
-    @AppStorage("selectedModelB") var selectedModelB: String = ""
-    @AppStorage("maxTurns") var maxTurns: Int = 8
-    @AppStorage("infiniteTurns") var infinite: Bool = false
+    // MARK: - App Storage
+    @AppStorage("portA") private var portA: Int = 11434
+    @AppStorage("portB") private var portB: Int = 11435
+    @AppStorage("selectedModelA") private var selectedModelA: String = ""
+    @AppStorage("selectedModelB") private var selectedModelB: String = ""
+    @AppStorage("maxTurns") private var maxTurns: Int = 8
+    @AppStorage("infiniteTurns") private var infinite: Bool = false
+    @AppStorage("contextTurns") private var contextTurns: Int = 12
 
+    // MARK: - State
     @State private var messages: [ChatMessage] = []
     @State private var userInput: String = ""
     @State private var isProcessing = false
     @State private var status: String = ""
-
     @State private var isSaving = false
-    @State private var turnNumber = 0 // Track the current turn
+    @State private var turnNumber = 0
+    @State private var currentChatTask: Task<Void, Never>?
 
-    @State private var currentChatTask: Task<Void, Never>? = nil
-
-    // For streaming support
+    // Streaming support
     @State private var currentStreamingMessage: ChatMessage?
     @State private var streamingBuffer: String = ""
-    @State private var currentStreamingTask: URLSessionDataTask? = nil
+    @State private var currentStreamingTask: URLSessionDataTask?
 
     var body: some View {
-            NavigationSplitView {
-                SettingsPanel(
-                    portA: $portA,
-                    portB: $portB,
-                    selectedModelA: $selectedModelA,
-                    selectedModelB: $selectedModelB,
-                    maxTurns: $maxTurns,
-                    infinite: $infinite
-                )
-            } detail: {
-                VStack
-                {
-                    // Status bar at the top or bottom:
-                            HStack {
-                                Text("Turn: \(turnNumber)")
-                                Spacer()
-                                Button("Save As") { isSaving = true }
-                                Button("Clear") {
-                                    messages.removeAll()
-                                    turnNumber = 0
-                                    currentStreamingMessage = nil
-                                    streamingBuffer = ""
-                                    currentStreamingTask?.cancel()
-                                    currentChatTask?.cancel()
-                                    currentStreamingTask = nil
-                                    isProcessing = false
-                                    status = ""
-                                }
-                                Button("Cancel") {
-                                    currentStreamingTask?.cancel()
-                                    currentChatTask?.cancel()
-                                    isProcessing = false
-                                    status = "Cancelled by user"
-                                    currentChatTask = nil
-                                    currentStreamingMessage = nil
-                                    streamingBuffer = ""
-                                    currentStreamingTask = nil
-                                }
-                                .disabled(currentChatTask == nil)
-                            }.padding([.top, .horizontal])
-                    ScrollViewReader { scrollProxy in
-                        ScrollView {
-                            LazyVStack(alignment: .leading, spacing: 10) {
-                                ForEach(displayMessages) { message in
-                                    messageBubble(message)
-                                }
-                            }
-                            .padding()
-                        }
-                        .background(Color(NSColor.windowBackgroundColor))
-                        .onChange(of: displayMessages.count) { _ in
-                            if let last = displayMessages.last {
-                                scrollProxy.scrollTo(last.id, anchor: .bottom)
-                            }
-                        }
-                        .onChange(of: streamingBuffer) { _ in
-                            if let current = currentStreamingMessage {
-                                scrollProxy.scrollTo(current.id, anchor: .bottom)
-                            }
-                        }
-                    }
-                    if isProcessing || !status.isEmpty {
-                        Text(status)
-                            .font(.caption)
-                            .foregroundColor(.gray)
-                            .padding(.vertical, 4)
-                    }
-                    Divider()
-                    HStack {
-                        TextField("Type your message…", text: $userInput)
-                            .textFieldStyle(RoundedBorderTextFieldStyle())
-                            .disabled(isProcessing)
-                            .onSubmit(sendUserMessage)
-                        Button("Send") {
-                            sendUserMessage()
-                        }
-                        .disabled(userInput.isEmpty || isProcessing)
-                    }
-                    .padding()
-                }.fileExporter(
-                    isPresented: $isSaving,
-                    document: ExportChatDocument(messages: messages),
-                    contentType: .json,
-                    defaultFilename: "LlamasChat"
-                ) { result in
-                    // Optionally handle success/failure here
-                }
+        NavigationSplitView {
+            SettingsPanel(
+                portA: $portA,
+                portB: $portB,
+                selectedModelA: $selectedModelA,
+                selectedModelB: $selectedModelB,
+                maxTurns: $maxTurns,
+                infinite: $infinite,
+                contextTurns: $contextTurns
+            )
+        } detail: {
+            VStack(spacing: 0) {
+                controlBar
+                messagesList
+                statusBar
+                Divider()
+                inputSection
             }
+            .fileExporter(
+                isPresented: $isSaving,
+                document: ExportChatDocument(messages: messages),
+                contentType: .json,
+                defaultFilename: "LlamasChat"
+            ) { result in
+                handleExportResult(result)
+            }
+        }
         .frame(minWidth: 500, minHeight: 600)
     }
 
-    // Computed property to combine permanent messages with streaming message
-    private var displayMessages: [ChatMessage] {
+    // MARK: - View Components
+
+    private var controlBar: some View {
+        HStack {
+            Text("Turn: \(turnNumber)")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            Spacer()
+
+            Button("Save As") {
+                isSaving = true
+            }
+            .disabled(messages.isEmpty)
+
+            Button("Clear") {
+                clearChat()
+            }
+            .disabled(messages.isEmpty && !isProcessing)
+
+            Button("Cancel") {
+                cancelCurrentOperation()
+            }
+            .disabled(currentChatTask == nil)
+        }
+        .padding([.top, .horizontal])
+    }
+
+    private var messagesList: some View {
+        ScrollViewReader { scrollProxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: 12) {
+                    ForEach(displayMessages) { message in
+                        MessageBubble(message: message)
+                    }
+                }
+                .padding()
+            }
+            .background(Color(NSColor.windowBackgroundColor))
+            .onChange(of: displayMessages.count) { _ in
+                scrollToBottom(scrollProxy)
+            }
+            .onChange(of: streamingBuffer) { _ in
+                scrollToStreamingMessage(scrollProxy)
+            }
+        }
+    }
+
+    private var statusBar: some View {
+        Group {
+            if isProcessing || !status.isEmpty {
+                HStack {
+                    if isProcessing {
+                        ProgressView()
+                            .scaleEffect(0.7)
+                    }
+                    Text(status)
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+                .padding(.vertical, 4)
+                .animation(.easeInOut(duration: 0.2), value: status)
+            }
+        }
+    }
+
+    private var inputSection: some View {
+        HStack {
+            TextField("Type your message…", text: $userInput, axis: .vertical)
+                .textFieldStyle(RoundedBorderTextFieldStyle())
+                .disabled(isProcessing)
+                .onSubmit(sendUserMessage)
+                .lineLimit(1...5)
+
+            Button("Send") {
+                sendUserMessage()
+            }
+            .disabled(userInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || isProcessing)
+            .keyboardShortcut(.return, modifiers: .command)
+        }
+        .padding()
+    }
+
+    // MARK: - Computed Properties
+
+    private var displayMessages: [ChatMessage]
+    {
         var result = messages
-        if let streaming = currentStreamingMessage {
+
+        if let streaming = currentStreamingMessage
+        {
+            print("sender: \(streaming.sender)")
             let (thinkPart, mainPart) = extractThink(text: streamingBuffer)
 
-            if let thinkPart = thinkPart, !thinkPart.isEmpty {
+            if let thinkPart = thinkPart, !thinkPart.isEmpty
+            {
                 let thinkMessage = ChatMessage(
                     text: thinkPart,
                     sender: streaming.sender,
@@ -149,15 +190,16 @@ struct ContentView: View {
                 result.append(thinkMessage)
             }
 
-            if !mainPart.isEmpty {
+            if !mainPart.isEmpty
+            {
                 let mainMessage = ChatMessage(
                     text: mainPart,
                     sender: streaming.sender,
                     isThink: false
                 )
                 result.append(mainMessage)
-            } else if thinkPart == nil && !streamingBuffer.isEmpty {
-                // No think tags, just show the streaming content
+            }
+            else if thinkPart == nil && !streamingBuffer.isEmpty {
                 let streamMessage = ChatMessage(
                     text: streamingBuffer,
                     sender: streaming.sender,
@@ -166,142 +208,214 @@ struct ContentView: View {
                 result.append(streamMessage)
             }
         }
+
         return result
     }
 
-    @ViewBuilder
-    func messageBubble(_ message: ChatMessage) -> some View {
-        HStack(alignment: .bottom) {
-            if message.sender == .user {
-                Spacer()
-                Text(message.text)
-                    .padding()
-                    .background(Color.blue)
-                    .foregroundColor(.white)
-                    .cornerRadius(12)
-            } else if message.isThink {
-                Text(message.text)
-                    .padding()
-                    .background(Color.yellow.opacity(0.7))
-                    .foregroundColor(.black)
-                    .cornerRadius(12)
-                Spacer()
-            } else if message.sender == .modelA {
-                Text("Model A:\n\(message.text)")
-                    .padding()
-                    .background(Color.green.opacity(0.8))
-                    .foregroundColor(.black)
-                    .cornerRadius(12)
-                Spacer()
-            } else {
-                Text("Model B:\n\(message.text)")
-                    .padding()
-                    .background(Color.orange.opacity(0.8))
-                    .foregroundColor(.black)
-                    .cornerRadius(12)
-                Spacer()
-            }
-        }
-        .id(message.id)
-        .padding(.horizontal)
-    }
+    // MARK: - Actions
 
-    func sendUserMessage() {
-        guard !userInput.isEmpty else { return }
-        let prompt = userInput
+    private func sendUserMessage() {
+        let trimmedInput = userInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedInput.isEmpty else { return }
+
+        let prompt = trimmedInput
         userInput = ""
-        messages.append(.init(text: prompt, sender: .user, isThink: false))
+        messages.append(ChatMessage(text: prompt, sender: .user, isThink: false))
+
         isProcessing = true
-        status = "Waiting for Model A…"
+        status = "Starting conversation…"
+
         currentChatTask = Task {
             await runDialogueLoop(firstPrompt: prompt)
-            isProcessing = false
-            status = ""
+            await MainActor.run {
+                isProcessing = false
+                status = ""
+            }
         }
     }
 
-    let contextTurns = 12  // Or make this user-configurable
+    private func clearChat() {
+        messages.removeAll()
+        turnNumber = 0
+        resetStreamingState()
+        cancelCurrentOperation()
+        status = ""
+    }
 
-    func runDialogueLoop(firstPrompt: String) async
+    private func cancelCurrentOperation() {
+        currentStreamingTask?.cancel()
+        currentChatTask?.cancel()
+        currentChatTask = nil
+        resetStreamingState()
+        if isProcessing {
+            isProcessing = false
+            status = "Cancelled by user"
+        }
+    }
+
+    private func resetStreamingState() {
+        currentStreamingMessage = nil
+        streamingBuffer = ""
+        currentStreamingTask = nil
+    }
+
+    private func scrollToBottom(_ scrollProxy: ScrollViewProxy) {
+        if let last = displayMessages.last {
+            withAnimation(.easeOut(duration: 0.3)) {
+                scrollProxy.scrollTo(last.id, anchor: .bottom)
+            }
+        }
+    }
+
+    private func scrollToStreamingMessage(_ scrollProxy: ScrollViewProxy) {
+        if let current = currentStreamingMessage {
+            scrollProxy.scrollTo(current.id, anchor: .bottom)
+        }
+    }
+
+    private func handleExportResult(_ result: Result<URL, Error>) {
+        switch result {
+        case .success(let url):
+            print("Chat exported to: \(url)")
+        case .failure(let error):
+            print("Export failed: \(error)")
+        }
+    }
+
+    // MARK: - Dialogue Logic
+
+    private func runDialogueLoop(firstPrompt: String) async
     {
-        var current = firstPrompt
+        var currentPrompt = firstPrompt
         var lastSender: ChatMessage.Sender = .user
         let turnLimit = infinite ? Int.max : maxTurns
 
-        while turnNumber < turnLimit {
+        while turnNumber < turnLimit && !Task.isCancelled
+        {
             turnNumber += 1
 
-            let contextMessages = messages.suffix(contextTurns)
-            let historyString = contextMessages.map { m in
-                let who = m.sender == .user ? "User"
-                : m.sender == .modelA ? "Model A"
-                : "Model B"
-                return "\(who): \(m.text)"
-            }.joined(separator: "\n")
+            let contextMessages = Array(messages.suffix(contextTurns))
+            let historyString = buildHistoryString(from: contextMessages)
 
-            if Task.isCancelled { break }
-
-            if lastSender == .user || lastSender == .modelB {
+            if lastSender == .user || lastSender == .modelB
+            {
                 // Model A's turn
-                await MainActor.run { status = "Waiting for Model A…" }
-                let systemPromptA = turnNumber == 1 ?
-                    "You are Model A in a conversation between two AI models. You will be discussing topics with Model B, taking turns to respond. Be thoughtful and engaging in your responses.\n\n" : ""
-                let promptForModelA = systemPromptA + historyString + "\nModel A:"
+                updateStatus("Model A is thinking…")
+                lastSender = .modelA
 
-                if let responseA = await generateWithOllamaStreaming(
+                let systemPrompt = buildSystemPrompt(for: .modelA, isFirstTurn: turnNumber == 1)
+                let fullPrompt = systemPrompt + historyString + "\nModel A:"
+
+                if let response = await generateResponse(
                     modelName: selectedModelA,
-                    prompt: promptForModelA,
+                    prompt: fullPrompt,
                     port: portA,
                     sender: .modelA
                 ) {
-                    current = responseA
-                    lastSender = .modelA
+                    currentPrompt = response
                 } else {
-                    await MainActor.run { status = "Model A error!" }
+                    updateStatus("Model A error!")
                     break
                 }
             } else {
-                var promptForModelB = current
+                // Model B's turn
+                updateStatus("Model B is thinking…")
+                lastSender = .modelB
+
+                let systemPrompt = buildSystemPrompt(for: .modelB, isFirstTurn: turnNumber == 2)
+                let fullPrompt: String
+
                 if turnNumber == 2 {
-                    // lets tell this guy what initial prompt is
-                    promptForModelB = firstPrompt + "\n what is your response? :" + current
+                    // For the first Model B response, include the original prompt for context
+                    fullPrompt = systemPrompt + "Original user prompt: \(firstPrompt)\n\n" + historyString + "\nModel B:"
+                } else {
+                    fullPrompt = systemPrompt + historyString + "\nModel B:"
                 }
 
-                // Model B's turn
-                await MainActor.run { status = "Waiting for Model B…" }
-                let systemPromptB = turnNumber == 2 ?
-                    "You are Model B in a conversation between two AI models. Model A has just responded to the user's prompt. Continue the discussion by responding thoughtfully to what Model A has said.\n\n" : ""
-                let fullPromptForModelB = systemPromptB + historyString + "\nModel B:"
-
-                if let responseB = await generateWithOllamaStreaming(
+                if let response = await generateResponse(
                     modelName: selectedModelB,
-                    prompt: fullPromptForModelB,
+                    prompt: fullPrompt,
                     port: portB,
                     sender: .modelB
                 ) {
-                    current = responseB
-                    lastSender = .modelB
+                    currentPrompt = response
                 } else {
-                    await MainActor.run { status = "Model B error!" }
+                    updateStatus("Model B error!")
                     break
                 }
             }
         }
-        await MainActor.run { status = "" }
+
+        updateStatus("")
     }
 
-    func generateWithOllamaStreaming(modelName: String, prompt: String, port: Int, sender: ChatMessage.Sender) async -> String? {
-        guard let url = URL(string: "http://127.0.0.1:\(port)/api/generate") else { return nil }
+    private func buildHistoryString(from messages: [ChatMessage]) -> String {
+        return messages.map { message in
+            let sender = message.sender.displayTitle
+            let prefix = message.isThink ? "[Thinking] " : ""
+            return "\(sender): \(prefix)\(message.text)"
+        }.joined(separator: "\n")
+    }
+
+    private func buildSystemPrompt(for sender: ChatMessage.Sender, isFirstTurn: Bool) -> String {
+        guard isFirstTurn else { return "" }
+
+        switch sender {
+        case .modelA:
+            return "You are Model A in a conversation between two AI models. Use the User Prompt as the starting point for your conversation. You will be discussing topics with Model B, taking turns to respond. Be thoughtful and engaging in your responses. You can use <think></think> tags to show your reasoning process.\n\n"
+        case .modelB:
+            return "You are Model B in a conversation between two AI models. Model A has just responded to the user's prompt. Continue the discussion by responding thoughtfully to what Model A has said. You can use <think></think> tags to show your reasoning process.\n\n"
+        case .user:
+            return ""
+        }
+    }
+
+    private func updateStatus(_ newStatus: String) {
+        Task { @MainActor in
+            status = newStatus
+        }
+    }
+
+    // MARK: - Network Communication
+
+    private func generateResponse(
+        modelName: String,
+        prompt: String,
+        port: Int,
+        sender: ChatMessage.Sender
+    ) async -> String?
+    {
+        guard !modelName.isEmpty else {
+            updateStatus("No model selected for \(sender.displayTitle)")
+            return nil
+        }
+
+        guard let url = URL(string: "http://127.0.0.1:\(port)/api/generate") else {
+            updateStatus("Invalid URL for \(sender.displayTitle)")
+            return nil
+        }
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.timeoutInterval = 300 // 5 minutes timeout
+
         let payload: [String: Any] = [
             "model": modelName,
             "prompt": prompt,
-            "stream": true
+            "stream": true,
+            "options": [
+                "temperature": 0.7,
+                "top_p": 0.9
+            ]
         ]
-        request.httpBody = try? JSONSerialization.data(withJSONObject: payload)
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+
+        do {
+            request.httpBody = try JSONSerialization.data(withJSONObject: payload)
+        } catch {
+            updateStatus("Failed to encode request for \(sender.displayTitle)")
+            return nil
+        }
 
         // Initialize streaming state
         await MainActor.run {
@@ -310,38 +424,34 @@ struct ContentView: View {
         }
 
         return await withCheckedContinuation { continuation in
-            let delegate = StreamingDelegate { chunk in
-                Task { @MainActor in
-                    self.streamingBuffer += chunk
-                }
-            } onFinish: {
-                Task { @MainActor in
-//                    guard let self = self else {
-//                        continuation.resume(returning: nil)
-//                        return
-//                    }
-
-                    let finalResponse = self.streamingBuffer
-                    let (thinkPart, mainPart) = extractThink(text: finalResponse)
-
-                    // Add the final messages to permanent storage
-                    if let thinkPart = thinkPart, !thinkPart.isEmpty {
-                        self.messages.append(ChatMessage(text: thinkPart, sender: sender, isThink: true))
+            let delegate = StreamingDelegate(
+                onChunk: { chunk in
+                    Task { @MainActor in
+                        self.streamingBuffer += chunk
                     }
+                },
+                onFinish: {
+                    Task { @MainActor in
+                        let finalResponse = self.streamingBuffer
+                        let (thinkPart, mainPart) = extractThink(text: finalResponse)
 
-                    let finalMainPart = mainPart.isEmpty ? finalResponse : mainPart
-                    if !finalMainPart.isEmpty {
-                        self.messages.append(ChatMessage(text: finalMainPart, sender: sender, isThink: false))
+                        // Add the final messages to permanent storage
+                        if let thinkPart = thinkPart, !thinkPart.isEmpty {
+                            self.messages.append(ChatMessage(text: thinkPart, sender: sender, isThink: true))
+                        }
+
+                        let finalMainPart = mainPart.isEmpty ? finalResponse : mainPart
+                        if !finalMainPart.isEmpty {
+                            self.messages.append(ChatMessage(text: finalMainPart, sender: sender, isThink: false))
+                        }
+
+                        // Clear streaming state
+                        self.resetStreamingState()
+
+                        continuation.resume(returning: finalMainPart)
                     }
-
-                    // Clear streaming state
-                    self.currentStreamingMessage = nil
-                    self.streamingBuffer = ""
-                    self.currentStreamingTask = nil
-
-                    continuation.resume(returning: finalMainPart)
                 }
-            }
+            )
 
             let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
             let task = session.dataTask(with: request)
@@ -349,7 +459,115 @@ struct ContentView: View {
             Task { @MainActor in
                 self.currentStreamingTask = task
             }
+
             task.resume()
         }
+    }
+}
+
+// MARK: - Message Bubble Component
+
+struct MessageBubble: View
+{
+    let message: ChatMessage
+
+    var body: some View
+    {
+        HStack(alignment: .top, spacing: 12)
+        {
+            if message.sender == .user
+            {
+                Spacer(minLength: 50)
+                userMessageBubble
+            }
+            else
+            {
+                assistantMessageBubble
+                Spacer(minLength: 50)
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 4)
+    }
+
+    private var userMessageBubble: some View
+    {
+        Text(message.text)
+            .textSelection(.enabled)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 20, style: .continuous)
+                    .fill(Color.accentColor)
+            )
+            .foregroundColor(.white)
+            .font(.body)
+    }
+
+    private var assistantMessageBubble: some View
+    {
+        VStack(alignment: .leading, spacing: 8)
+        {
+            // Header with model name and thinking indicator
+            HStack(spacing: 6)
+            {
+                Text(message.sender.displayTitle)
+                    .font(.caption)
+                    .fontWeight(.semibold)
+                    .foregroundColor(.secondary)
+
+                if message.isThink
+                {
+                    Image(systemName: "brain.head.profile")
+                        .font(.caption2)
+                        .foregroundColor(.orange)
+                }
+
+                Spacer()
+            }
+
+            // Message content
+            Text(message.text)
+                .textSelection(.enabled)
+                .font(.body)
+                .foregroundColor(.primary)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .background(
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(backgroundColorForMessage)
+                .stroke(strokeColorForMessage, lineWidth: strokeWidthForMessage)
+        )
+    }
+
+    private var backgroundColorForMessage: Color
+    {
+        if message.isThink {
+            return Color.yellow.opacity(0.15)
+        }
+
+        switch message.sender {
+        case .user:
+            return Color.accentColor
+        case .modelA:
+            return Color.green.opacity(0.1)
+        case .modelB:
+            return Color.orange.opacity(0.1)
+        }
+    }
+
+    private var strokeColorForMessage: Color
+    {
+        if message.isThink
+        {
+            return Color.yellow.opacity(0.4)
+        }
+        return Color.clear
+    }
+
+    private var strokeWidthForMessage: CGFloat
+    {
+        message.isThink ? 1.0 : 0.8
     }
 }
