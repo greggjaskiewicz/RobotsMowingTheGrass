@@ -40,6 +40,7 @@ struct ContentView: View {
     // For streaming support
     @State private var currentStreamingMessage: ChatMessage?
     @State private var streamingBuffer: String = ""
+    @State private var currentStreamingTask: URLSessionDataTask? = nil
 
     var body: some View {
             NavigationSplitView {
@@ -64,14 +65,21 @@ struct ContentView: View {
                                     turnNumber = 0
                                     currentStreamingMessage = nil
                                     streamingBuffer = ""
+                                    currentStreamingTask?.cancel()
+                                    currentChatTask?.cancel()
+                                    currentStreamingTask = nil
+                                    isProcessing = false
+                                    status = ""
                                 }
                                 Button("Cancel") {
+                                    currentStreamingTask?.cancel()
                                     currentChatTask?.cancel()
                                     isProcessing = false
                                     status = "Cancelled by user"
                                     currentChatTask = nil
                                     currentStreamingMessage = nil
                                     streamingBuffer = ""
+                                    currentStreamingTask = nil
                                 }
                                 .disabled(currentChatTask == nil)
                             }.padding([.top, .horizontal])
@@ -106,6 +114,7 @@ struct ContentView: View {
                     HStack {
                         TextField("Type your message…", text: $userInput)
                             .textFieldStyle(RoundedBorderTextFieldStyle())
+                            .disabled(isProcessing)
                             .onSubmit(sendUserMessage)
                         Button("Send") {
                             sendUserMessage()
@@ -235,7 +244,9 @@ struct ContentView: View {
             if lastSender == .user || lastSender == .modelB {
                 // Model A's turn
                 await MainActor.run { status = "Waiting for Model A…" }
-                let promptForModelA = historyString + "\nModel A:"
+                let systemPromptA = turnNumber == 1 ?
+                    "You are Model A in a conversation between two AI models. You will be discussing topics with Model B, taking turns to respond. Be thoughtful and engaging in your responses.\n\n" : ""
+                let promptForModelA = systemPromptA + historyString + "\nModel A:"
 
                 if let responseA = await generateWithOllamaStreaming(
                     modelName: selectedModelA,
@@ -258,7 +269,9 @@ struct ContentView: View {
 
                 // Model B's turn
                 await MainActor.run { status = "Waiting for Model B…" }
-                let fullPromptForModelB = historyString + "\nModel B:"
+                let systemPromptB = turnNumber == 2 ?
+                    "You are Model B in a conversation between two AI models. Model A has just responded to the user's prompt. Continue the discussion by responding thoughtfully to what Model A has said.\n\n" : ""
+                let fullPromptForModelB = systemPromptB + historyString + "\nModel B:"
 
                 if let responseB = await generateWithOllamaStreaming(
                     modelName: selectedModelB,
@@ -279,9 +292,7 @@ struct ContentView: View {
 
     func generateWithOllamaStreaming(modelName: String, prompt: String, port: Int, sender: ChatMessage.Sender) async -> String? {
         guard let url = URL(string: "http://127.0.0.1:\(port)/api/generate") else { return nil }
-        if let _ = prompt.range(of: "</think>") {
-            print("wtf")
-        }
+
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         let payload: [String: Any] = [
@@ -326,6 +337,7 @@ struct ContentView: View {
                     // Clear streaming state
                     self.currentStreamingMessage = nil
                     self.streamingBuffer = ""
+                    self.currentStreamingTask = nil
 
                     continuation.resume(returning: finalMainPart)
                 }
@@ -333,6 +345,10 @@ struct ContentView: View {
 
             let session = URLSession(configuration: .default, delegate: delegate, delegateQueue: nil)
             let task = session.dataTask(with: request)
+
+            Task { @MainActor in
+                self.currentStreamingTask = task
+            }
             task.resume()
         }
     }

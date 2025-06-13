@@ -41,6 +41,11 @@ class StreamingDelegate: NSObject, URLSessionDataDelegate
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?)
     {
+        // Always call onFinish, whether it completed successfully or was cancelled
         onFinish()
+
+        if let error = error {
+            print("Streaming error: \(error)")
+        }
     }
 }
