@@ -19,6 +19,7 @@ class ChatViewModel: ObservableObject {
     var configManager: ModelConfigurationManager
     private var currentTask: Task<Void, Never>?
     private var streamingCancellable: Cancellable?
+    private let EndTag: String = "</conversationEnd>"
 
     // Streaming state
     private var streamingMessageIndex: Int?
@@ -129,10 +130,11 @@ class ChatViewModel: ObservableObject {
 
     private func runDialogueLoop(firstPrompt: String, models: [ModelConfiguration]) async
     {
-        var currentPrompt = firstPrompt
+        var currentPrompt = ""
         let turnLimit = infinite ? Int.max : maxTurns
+        var endFlags = 0
 
-        while turnNumber < turnLimit && !Task.isCancelled
+        while turnNumber < turnLimit && !Task.isCancelled && endFlags != models.count
         {
             turnNumber += 1
 
@@ -159,10 +161,20 @@ class ChatViewModel: ObservableObject {
                 prompt: fullPrompt
             ) {
                 currentPrompt = response
+                if response.contains(EndTag)
+                {
+                    endFlags += 1
+                    currentPrompt = response.replacingOccurrences(of: EndTag, with: "")
+                }
             } else {
                 status = "\(currentModel.displayName) error!"
                 break
             }
+        }
+
+        if endFlags >= models.count
+        {
+            status = "All models agreed to stop"
         }
 
         status = ""
@@ -258,8 +270,11 @@ class ChatViewModel: ObservableObject {
 
     private func buildHistoryString(from messages: [ChatMessage]) -> String {
         messages.map { message in
-            let prefix = message.isThink ? "[Thinking] " : ""
-            return "\(message.senderName): \(prefix)\(message.text)"
+//            let prefix = message.isThink ? "[Thinking] " : ""
+//            let suffix = message.isThink ? "[/Thinking] " : ""
+//            return "\(message.senderName): \(prefix)\(message.text)\(suffix)"
+            guard message.isThink == false else { return "" }
+            return message.senderName + ": " + message.text
         }.joined(separator: "\n")
     }
 
@@ -269,7 +284,7 @@ class ChatViewModel: ObservableObject {
         totalModels: Int,
         originalPrompt: String
     ) -> String {
-        guard isFirstResponse || currentModelIndex <= totalModels else { return "" }
+        guard isFirstResponse || currentModelIndex <= totalModels else { return "Original user prompt: \(originalPrompt)\n\n" }
 
         let modelList = configManager.enabledConfigurations
             .map { $0.displayName }
@@ -278,8 +293,10 @@ class ChatViewModel: ObservableObject {
         let basePrompt = """
         You are \(model.displayName) in a conversation between \(totalModels) AI models (\(modelList)). 
         You will be discussing topics with the other models, taking turns to respond. 
-        Be thoughtful and engaging in your responses. Keep it super brief!
+        We are all friends here. Be relaxed, be a rebel and be creative.
+        Be thoughtful and engaging in your responses. Keep it super brief and on topic !
         You can use <think></think> tags to show your reasoning process.
+        If you feel the conversation comes to conclusion and you need to abort: use the tag \(EndTag), all participants will use it to end converation. Don't use that tag otherwise! 
         
         """
 
