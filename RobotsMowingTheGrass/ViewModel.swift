@@ -19,7 +19,7 @@ class ChatViewModel: ObservableObject {
     var configManager: ModelConfigurationManager
     private var currentTask: Task<Void, Never>?
     private var streamingCancellable: Cancellable?
-    private let EndTag: String = "</conversationEnd>"
+    private let EndTag: String = "<conversationEnd/>"
 
     // Streaming state
     private var streamingMessageIndex: Int?
