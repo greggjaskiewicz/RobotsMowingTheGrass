@@ -130,20 +130,23 @@ class ChatViewModel: ObservableObject {
 
     private func runDialogueLoop(firstPrompt: String, models: [ModelConfiguration]) async
     {
-        var currentPrompt = ""
         let turnLimit = infinite ? Int.max : maxTurns
         var endFlags = 0
 
+        turnNumber = 1
         while turnNumber < turnLimit && !Task.isCancelled && endFlags != models.count
         {
-            turnNumber += 1
-
             let contextMessages = Array(messages.suffix(contextTurns))
             let historyString = buildHistoryString(from: contextMessages)
 
             // Get next model in round-robin fashion
             let currentModel = models[currentModelIndex % models.count]
             currentModelIndex += 1
+            if currentModelIndex == models.count
+            {
+                currentModelIndex = 0
+                turnNumber += 1
+            }
 
             status = "\(currentModel.displayName) is thinking…"
 
@@ -160,11 +163,11 @@ class ChatViewModel: ObservableObject {
                 configuration: currentModel,
                 prompt: fullPrompt
             ) {
-                currentPrompt = response
+//                currentPrompt = response
                 if response.contains(EndTag)
                 {
                     endFlags += 1
-                    currentPrompt = response.replacingOccurrences(of: EndTag, with: "")
+//                    let currentResponse = response.replacingOccurrences(of: EndTag, with: "")
                 }
             } else {
                 status = "\(currentModel.displayName) error!"
@@ -176,14 +179,17 @@ class ChatViewModel: ObservableObject {
         {
             status = "All models agreed to stop"
         }
-
-        status = ""
+        else
+        {
+            status = ""
+        }
     }
 
     private func streamResponse(
         configuration: ModelConfiguration,
         prompt: String
-    ) async -> String? {
+    ) async -> String?
+    {
         // Create streaming message
         let streamingMessage = ChatMessage(
             text: "",
@@ -240,7 +246,8 @@ class ChatViewModel: ObservableObject {
         at index: Int,
         with text: String,
         configuration: ModelConfiguration
-    ) {
+    )
+    {
         messages.remove(at: index)
 
         let (thinkPart, mainPart) = extractThink(text: text)
@@ -291,13 +298,12 @@ class ChatViewModel: ObservableObject {
             .joined(separator: ", ")
 
         let basePrompt = """
-        You are \(model.displayName) in a conversation between \(totalModels) AI models (\(modelList)). 
+        You are \(model.displayName) in a conversation between \(totalModels) AI models: (\(modelList)). 
         You will be discussing topics with the other models, taking turns to respond. 
         We are all friends here. Be relaxed, be a rebel and be creative.
         Be thoughtful and engaging in your responses. Keep it super brief and on topic !
         You can use <think></think> tags to show your reasoning process.
-        If you feel the conversation comes to conclusion and you need to abort: use the tag \(EndTag), all participants will use it to end converation. Don't use that tag otherwise! 
-        
+        If you feel the conversation comes to conclusion and you need to abort: use the tag \(EndTag), all participants will use it to end converation. Don't give up easily tho! 
         """
 
         if isFirstResponse {

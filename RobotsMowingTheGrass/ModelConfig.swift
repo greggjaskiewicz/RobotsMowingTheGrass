@@ -46,16 +46,26 @@ struct ModelConfiguration: Identifiable, Codable, Equatable {
         self.enabled = enabled
     }
 
-    static func makeDefault(index: Int) -> ModelConfiguration {
-        let colors: [Color] = [.green, .orange, .blue, .purple, .pink, .teal]
-        let names = ["A", "B", "C", "D", "E", "F"]
+    static func randomPastelColor() -> Color
+    {
+        // Pastel colours have high lightness and low-medium saturation.
+        let hue = Double.random(in: 0...1)
+        let saturation = Double.random(in: 0.4...0.7)  // Not too saturated
+        let brightness = Double.random(in: 0.85...1.0) // Keep it bright
+
+        return Color(hue: hue, saturation: saturation, brightness: brightness)
+    }
+
+    static func makeDefault(index: Int) -> ModelConfiguration
+    {
+        let letter = Character(UnicodeScalar(65 + (index % 26))!) // 65 is "A"
 
         return ModelConfiguration(
-            name: "Model \(names[index % names.count])",
-            displayName: "Model \(names[index % names.count])",
-            port: 11434 + index,
+            name: "Model \(letter)",
+            displayName: "Model \(letter)",
+            port: 11434,
             modelName: "",
-            bubbleColor: CodableColor(colors[index % colors.count])
+            bubbleColor: CodableColor(randomPastelColor())
         )
     }
 }
@@ -68,7 +78,8 @@ struct CodableColor: Codable, Equatable {
     let blue: Double
     let opacity: Double
 
-    init(_ color: Color) {
+    init(_ color: Color)
+    {
         // Convert to sRGB color space to avoid crashes with system colors
         if let cgColor = color.cgColor,
            let srgbColor = cgColor.converted(to: CGColorSpace(name: CGColorSpace.sRGB)!, intent: .defaultIntent, options: nil) {
@@ -77,7 +88,9 @@ struct CodableColor: Codable, Equatable {
             self.green = Double(components[safe: 1] ?? 0)
             self.blue = Double(components[safe: 2] ?? 0)
             self.opacity = Double(components[safe: 3] ?? 1)
-        } else {
+        }
+        else
+        {
             // Fallback to a default color if conversion fails
             self.red = 0.5
             self.green = 0.5
@@ -86,21 +99,24 @@ struct CodableColor: Codable, Equatable {
         }
     }
 
-    init(red: Double, green: Double, blue: Double, opacity: Double = 1.0) {
+    init(red: Double, green: Double, blue: Double, opacity: Double = 1.0)
+    {
         self.red = red
         self.green = green
         self.blue = blue
         self.opacity = opacity
     }
 
-    var color: Color {
+    var color: Color
+    {
         Color(red: red, green: green, blue: blue, opacity: opacity)
     }
 }
 
 // MARK: - Updated ChatMessage
 
-struct ChatMessage: Identifiable, Equatable {
+struct ChatMessage: Identifiable, Equatable
+{
     let id = UUID()
     var text: String
     let senderID: UUID  // References ModelConfiguration.id
@@ -108,11 +124,13 @@ struct ChatMessage: Identifiable, Equatable {
     var isThink: Bool
     var isStreaming: Bool = false
 
-    var isUser: Bool {
+    var isUser: Bool
+    {
         senderID == UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
     }
 
-    static func userMessage(text: String) -> ChatMessage {
+    static func userMessage(text: String) -> ChatMessage
+    {
         ChatMessage(
             text: text,
             senderID: UUID(uuidString: "00000000-0000-0000-0000-000000000000")!,
@@ -126,21 +144,34 @@ struct ChatMessage: Identifiable, Equatable {
 // MARK: - Configuration Manager
 
 @MainActor
-class ModelConfigurationManager: ObservableObject {
+class ModelConfigurationManager: ObservableObject
+{
     @Published var configurations: [ModelConfiguration] = []
 
     private let userDefaults = UserDefaults.standard
     private let configurationsKey = "model_configurations"
 
-    init() {
+    init()
+    {
         loadConfigurations()
     }
 
-    func loadConfigurations() {
+    var configurationColours: [Color]
+    {
+        configurations.indices.map(\.self).map { index in
+            configurations[index].bubbleColor.color
+        }
+    }
+
+    func loadConfigurations()
+    {
         if let data = userDefaults.data(forKey: configurationsKey),
-           let decoded = try? JSONDecoder().decode([ModelConfiguration].self, from: data) {
+           let decoded = try? JSONDecoder().decode([ModelConfiguration].self, from: data)
+        {
             configurations = decoded
-        } else {
+        }
+        else
+        {
             // Create default configurations
             configurations = [
                 ModelConfiguration.makeDefault(index: 0),
@@ -150,39 +181,46 @@ class ModelConfigurationManager: ObservableObject {
         }
     }
 
-    func saveConfigurations() {
+    func saveConfigurations()
+    {
         if let encoded = try? JSONEncoder().encode(configurations) {
             userDefaults.set(encoded, forKey: configurationsKey)
         }
     }
 
-    func addConfiguration() {
+    func addConfiguration()
+    {
         let newConfig = ModelConfiguration.makeDefault(index: configurations.count)
         configurations.append(newConfig)
         saveConfigurations()
     }
 
-    func removeConfiguration(at index: Int) {
+    func removeConfiguration(at index: Int)
+    {
         guard configurations.count > 1 else { return } // Keep at least one
         configurations.remove(at: index)
         saveConfigurations()
     }
 
-    func updateConfiguration(_ config: ModelConfiguration) {
-        if let index = configurations.firstIndex(where: { $0.id == config.id }) {
+    func updateConfiguration(_ config: ModelConfiguration)
+    {
+        if let index = configurations.firstIndex(where: { $0.id == config.id })
+        {
             configurations[index] = config
             saveConfigurations()
         }
     }
 
-    var enabledConfigurations: [ModelConfiguration] {
+    var enabledConfigurations: [ModelConfiguration]
+    {
         configurations.filter { $0.enabled && !$0.modelName.isEmpty }
     }
 }
 
 // MARK: - Updated Chat Service Protocol
 
-protocol ChatServiceProtocol {
+protocol ChatServiceProtocol
+{
     func generateResponse(
         configuration: ModelConfiguration,
         prompt: String,
@@ -191,7 +229,8 @@ protocol ChatServiceProtocol {
     ) -> Cancellable?
 }
 
-enum Errors: Swift.Error {
+enum Errors: Swift.Error
+{
     case invalidURL
 }
 
@@ -226,9 +265,12 @@ class OllamaChatService: ChatServiceProtocol
             ]
         ]
 
-        do {
+        do
+        {
             request.httpBody = try JSONSerialization.data(withJSONObject: payload)
-        } catch {
+        }
+        catch
+        {
             onComplete(.failure(error))
             return nil
         }
@@ -249,7 +291,8 @@ class OllamaChatService: ChatServiceProtocol
         let task = session.dataTask(with: request)
         task.resume()
 
-        return AnyCancellable {
+        return AnyCancellable
+        {
             task.cancel()
         }
     }
