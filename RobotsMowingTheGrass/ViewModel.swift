@@ -2,7 +2,8 @@ import SwiftUI
 import Combine
 
 @MainActor
-class ChatViewModel: ObservableObject {
+class ChatViewModel: ObservableObject
+{
     // Published properties
     @Published var messages: [ChatMessage] = []
     @Published var isProcessing = false
@@ -35,7 +36,8 @@ class ChatViewModel: ObservableObject {
 
     // MARK: - Public Methods
 
-    func sendUserMessage(_ text: String) {
+    func sendUserMessage(_ text: String)
+    {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
 
@@ -57,7 +59,8 @@ class ChatViewModel: ObservableObject {
         }
     }
 
-    func clear() {
+    func clear()
+    {
         messages.removeAll()
         turnNumber = 0
         currentModelIndex = 0
@@ -65,13 +68,16 @@ class ChatViewModel: ObservableObject {
         status = ""
     }
 
-    func cancel() {
+    func cancel()
+    {
         cancelCurrentOperation()
     }
 
-    var displayMessages: [ChatMessage] {
+    var displayMessages: [ChatMessage]
+    {
         messages.flatMap { message in
-            if message.isStreaming {
+            if message.isStreaming
+            {
                 return parseStreamingMessage(message)
             } else {
                 return [message]
@@ -183,6 +189,8 @@ class ChatViewModel: ObservableObject {
         {
             status = ""
         }
+
+        isProcessing = false
     }
 
     private func streamResponse(
@@ -275,11 +283,9 @@ class ChatViewModel: ObservableObject {
         }
     }
 
-    private func buildHistoryString(from messages: [ChatMessage]) -> String {
+    private func buildHistoryString(from messages: [ChatMessage]) -> String
+    {
         messages.map { message in
-//            let prefix = message.isThink ? "[Thinking] " : ""
-//            let suffix = message.isThink ? "[/Thinking] " : ""
-//            return "\(message.senderName): \(prefix)\(message.text)\(suffix)"
             guard message.isThink == false else { return "" }
             return message.senderName + ": " + message.text
         }.joined(separator: "\n")
@@ -290,7 +296,8 @@ class ChatViewModel: ObservableObject {
         isFirstResponse: Bool,
         totalModels: Int,
         originalPrompt: String
-    ) -> String {
+    ) -> String
+    {
         guard isFirstResponse || currentModelIndex <= totalModels else { return "Original user prompt: \(originalPrompt)\n\n" }
 
         let modelList = configManager.enabledConfigurations
@@ -298,7 +305,8 @@ class ChatViewModel: ObservableObject {
             .joined(separator: ", ")
 
         let basePrompt = """
-        You are \(model.displayName) in a conversation between \(totalModels) AI models: (\(modelList)). 
+        You are \(model.displayName) in a conversation between \(totalModels) AI models: (\(modelList)). \n\n
+        \(model.personality.prompt)\n\n
         You will be discussing topics with the other models, taking turns to respond. 
         We are all friends here. Be relaxed, be a rebel and be creative.
         Be thoughtful and engaging in your responses. Keep it super brief and on topic !
@@ -306,9 +314,13 @@ class ChatViewModel: ObservableObject {
         If you feel the conversation comes to conclusion and you need to abort: use the tag \(EndTag), all participants will use it to end converation. Don't give up easily tho! 
         """
 
-        if isFirstResponse {
+        if isFirstResponse
+        {
             return basePrompt + "Use the User Prompt as the starting point for your conversation.\n\n"
-        } else if currentModelIndex <= totalModels {
+        }
+        else
+        if currentModelIndex <= totalModels
+        {
             return basePrompt + "Original user prompt: \(originalPrompt)\n\n"
         }
 

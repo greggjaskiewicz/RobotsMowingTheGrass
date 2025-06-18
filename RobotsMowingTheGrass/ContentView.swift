@@ -37,6 +37,7 @@ struct ContentViewBody: View {
     @Binding var contextTurns: Int
     @Binding var userInput: String
     @Binding var isSaving: Bool
+    @State private var selectedExportFormat: UTType = .json
 
     @StateObject private var viewModel: ChatViewModel
 
@@ -66,6 +67,7 @@ struct ContentViewBody: View {
             )
             .environmentObject(configManager)
         } detail: {
+            
             VStack(spacing: 0) {
                 controlBar
                 messagesList
@@ -76,7 +78,7 @@ struct ContentViewBody: View {
             .fileExporter(
                 isPresented: $isSaving,
                 document: ExportChatDocument(messages: viewModel.messages),
-                contentType: .json,
+                contentType: selectedExportFormat,
                 defaultFilename: "LlamasChat"
             ) { result in
                 handleExportResult(result)
@@ -101,7 +103,14 @@ struct ContentViewBody: View {
             }
 
             Spacer()
-
+            Picker("", selection: $selectedExportFormat) {
+                Text("JSON").tag(UTType.json)
+                Text("Txt").tag(UTType.plainText)
+                Text("HTML").tag(UTType.html)
+            }
+            .pickerStyle(.segmented)
+            .padding()
+            Spacer()
             Button("Save As") {
                 isSaving = true
             }
@@ -144,7 +153,8 @@ struct ContentViewBody: View {
         Group {
             if viewModel.isProcessing || !viewModel.status.isEmpty {
                 HStack {
-                    if viewModel.isProcessing {
+                    if viewModel.isProcessing
+                    {
                         ProgressView()
                             .scaleEffect(0.7)
                     }

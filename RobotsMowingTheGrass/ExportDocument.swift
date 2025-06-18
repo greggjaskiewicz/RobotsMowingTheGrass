@@ -31,16 +31,104 @@ struct ExportChatDocument: FileDocument {
         }
     }
 
+    static var writableContentTypes: [UTType] {
+        [.json, .plainText, .html]
+    }
+
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
         let data: Data
 
-        if configuration.contentType == .json {
+        switch configuration.contentType {
+        case .json:
             data = try JSONEncoder().encode(chatData)
-        } else {
+
+        case .plainText:
             data = chatData.toPlainText().data(using: .utf8) ?? Data()
+
+        case .html:
+            data = htmlRepresentation.data(using: .utf8) ?? Data()
+
+        default:
+            throw CocoaError(.fileWriteUnknown, userInfo: [
+                NSDebugDescriptionErrorKey: "Unsupported content type \(configuration.contentType)"
+            ])
         }
 
         return FileWrapper(regularFileWithContents: data)
+    }
+
+//    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+//        let data: Data
+//
+//        if configuration.contentType == .json {
+//            data = try JSONEncoder().encode(chatData)
+//        } else {
+//            data = chatData.toPlainText().data(using: .utf8) ?? Data()
+//        }
+//
+//        return FileWrapper(regularFileWithContents: data)
+//    }
+
+    func exportAsHTML(to url: URL) throws {
+        try htmlRepresentation.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    var htmlRepresentation: String {
+        """
+        <!DOCTYPE html>
+        <html lang="en">
+        <head>
+            <meta charset="UTF-8">
+            <style>
+                body {
+                    font-family: -apple-system, Helvetica, sans-serif;
+                    background: #f9f9f9;
+                    padding: 2em;
+                    line-height: 1.6;
+                }
+                .bubble {
+                    padding: 1em;
+                    margin-bottom: 1.2em;
+                    border-radius: 10px;
+                    max-width: 600px;
+                    box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+                }
+                .user {
+                    background: #d0ebff;
+                    align-self: flex-end;
+                }
+                .model {
+                    background: #e9ecef;
+                }
+                .sender {
+                    font-weight: bold;
+                    font-size: 0.9em;
+                    margin-bottom: 0.4em;
+                    color: #495057;
+                }
+            </style>
+        </head>
+        <body>
+        \(chatData.messages.map { message in
+            """
+            <div class="bubble \(message.isUser ? "user" : "model")">
+                <div class="sender">\(escapeHTML(message.senderName.isEmpty ? "User" : message.senderName))</div>
+                <div class="content">\(escapeHTML(message.text).replacingOccurrences(of: "\n", with: "<br>"))</div>
+            </div>
+            """
+        }.joined(separator: "\n"))
+        </body>
+        </html>
+        """
+    }
+
+    private func escapeHTML(_ input: String) -> String {
+        input
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&#39;")
     }
 }
 

@@ -289,6 +289,22 @@ struct ModelConfigurationView: View
                 Spacer()
             }
 
+            // Personality preset picker
+            HStack {
+                Text("Personality:")
+                    .frame(width: 90, alignment: .trailing)
+
+                Picker("", selection: $configuration.personality) {
+                    ForEach(PersonalityPreset.allCases, id: \.self) { preset in
+                        Text(preset.displayName).tag(preset)
+                    }
+                }
+                .pickerStyle(MenuPickerStyle())
+                .onChange(of: configuration.personality) { onUpdate() }
+
+                Spacer()
+            }
+
             if let error = errorMessage
             {
                 Text(error)
