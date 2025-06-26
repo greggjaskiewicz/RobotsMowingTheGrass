@@ -196,6 +196,7 @@ struct ChatMessage: Identifiable, Equatable
 class ModelConfigurationManager: ObservableObject
 {
     @Published var configurations: [ModelConfiguration] = []
+    @Published var viewModel: ChatViewModel?
 
     private let userDefaults = UserDefaults.standard
     private let configurationsKey = "model_configurations"

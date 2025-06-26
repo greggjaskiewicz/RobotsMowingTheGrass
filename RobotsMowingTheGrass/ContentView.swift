@@ -40,6 +40,7 @@ struct ContentViewBody: View {
     @State private var selectedExportFormat: UTType = .json
 
     @StateObject private var viewModel: ChatViewModel
+    @State private var clarificationResponse: String = ""
 
     init(
         configManager: ModelConfigurationManager,
@@ -67,7 +68,6 @@ struct ContentViewBody: View {
             )
             .environmentObject(configManager)
         } detail: {
-            
             VStack(spacing: 0) {
                 controlBar
                 messagesList
@@ -83,6 +83,34 @@ struct ContentViewBody: View {
             ) { result in
                 handleExportResult(result)
             }
+            .sheet(isPresented: $viewModel.isClarificationPresented) {
+                        VStack(spacing: 20) {
+                            Text(viewModel.pendingClarificationPrompt ?? "Need your input:")
+                                .font(.headline)
+                                .multilineTextAlignment(.center)
+                                .padding()
+
+                            TextField("Type your response here…", text: $clarificationResponse)
+                                .textFieldStyle(RoundedBorderTextFieldStyle())
+                                .padding(.horizontal)
+
+                            HStack {
+                                Spacer()
+                                Button("Cancel") {
+                                    viewModel.isClarificationPresented = false
+                                    clarificationResponse = ""
+                                }
+                                Button("Submit") {
+                                    // resume the continuation in the ViewModel
+                                    viewModel.clarificationContinuation?.resume(returning: clarificationResponse)
+                                    clarificationResponse = ""
+                                }
+                                .keyboardShortcut(.defaultAction)
+                            }
+                            .padding()
+                        }
+                        .frame(width: 400, height: 200)
+                    }
         }
         .frame(minWidth: 700, minHeight: 600)
     }

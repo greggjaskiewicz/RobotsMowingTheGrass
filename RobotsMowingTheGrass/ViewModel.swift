@@ -10,6 +10,9 @@ class ChatViewModel: ObservableObject
     @Published var status = ""
     @Published var turnNumber = 0
 
+    @Published var isClarificationPresented: Bool = false
+    @Published var pendingClarificationPrompt: String? = nil
+
     // Settings
     @AppStorage("maxTurns") private var maxTurns: Int = 8
     @AppStorage("infiniteTurns") private var infinite: Bool = false
@@ -99,18 +102,21 @@ class ChatViewModel: ObservableObject
 
     // MARK: - Private Methods
 
-    private func parseStreamingMessage(_ message: ChatMessage) -> [ChatMessage] {
+    private func parseStreamingMessage(_ message: ChatMessage) -> [ChatMessage]
+    {
         let (thinkPart, mainPart) = extractThink(text: message.text)
         var result: [ChatMessage] = []
 
-        if let thinkPart = thinkPart, !thinkPart.isEmpty {
+        if let thinkPart = thinkPart, !thinkPart.isEmpty
+        {
             var thinkMessage = message
             thinkMessage.text = thinkPart
             thinkMessage.isThink = true
             result.append(thinkMessage)
         }
 
-        if !mainPart.isEmpty {
+        if !mainPart.isEmpty
+        {
             var mainMessage = message
             mainMessage.text = mainPart
             mainMessage.isThink = false
@@ -122,17 +128,78 @@ class ChatViewModel: ObservableObject
         return result
     }
 
-    private func cancelCurrentOperation() {
+    private func cancelCurrentOperation()
+    {
         streamingCancellable?.cancel()
         currentTask?.cancel()
         currentTask = nil
         streamingMessageIndex = nil
 
-        if isProcessing {
+        if isProcessing
+        {
             isProcessing = false
             status = "Cancelled by user"
         }
     }
+
+    // continuation we’ll use to wake up the async handleUserResponse
+    var clarificationContinuation: CheckedContinuation<String, Never>?
+
+    /// Scans for `<clarifyWithUser>…</clarifyWithUser>`, shows a sheet,
+    /// suspends until the user replies, then returns their answer.
+    func handleUserResponse(_ response: String) async -> String?
+    {
+        guard let tagRange = response.range(of: "<clarifyWithUser>(.*?)</clarifyWithUser>",
+                                          options: .regularExpression),
+            let innerRange = response.range(of: "(?<=<clarifyWithUser>).*?(?=</clarifyWithUser>)",
+                                            options: .regularExpression)
+        else {
+            return nil
+        }
+
+        let question = String(response[innerRange])
+
+        pendingClarificationPrompt = question
+        isClarificationPresented = true
+
+        let answer = await withCheckedContinuation { (continuation: CheckedContinuation<String, Never>) in
+            self.clarificationContinuation = continuation
+        }
+
+        pendingClarificationPrompt = nil
+        isClarificationPresented = false
+        clarificationContinuation = nil
+
+        // 5) append their answer as a user message
+        let userMsg = ChatMessage(
+            text: answer,
+            senderID: UUID(uuid:( 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0)),
+            senderName: "You",
+            isThink: false,
+            isStreaming: false
+        )
+        messages.append(userMsg)
+
+        return answer
+
+    }
+
+//    private func handleUserResponse(_ response: String)
+//    {
+//        if let range = response.range(of: "<clarifyWithUser>(.*?)</clarifyWithUser>", options: .regularExpression)
+//        {
+//            let prompt = String(response[range])
+//            // Extract actual question (strip the tags)
+//            if let questionRange = prompt.range(of: "(?<=<clarifyWithUser>).*?(?=</clarifyWithUser>)", options: .regularExpression)
+//            {
+//                let question = String(prompt[questionRange])
+//
+//
+//               
+//            }
+//        }
+//    }
+
 
     private func runDialogueLoop(firstPrompt: String, models: [ModelConfiguration]) async
     {
@@ -175,6 +242,21 @@ class ChatViewModel: ObservableObject
                     endFlags += 1
 //                    let currentResponse = response.replacingOccurrences(of: EndTag, with: "")
                 }
+
+                if response.contains("<clarifyWithUser>") {
+                    if let answer = await handleUserResponse(response) {
+                        // incorporate `answer` into your next prompt, e.g.:
+                        print("added answer to response \(answer)")
+//                        response += "\nUser clarified: \(answer)\n"
+                    }
+                    continue  // or however you proceed in your loop
+                }
+
+//                if response.contains("<clarifyWithUser>")
+//                {
+//                    let user_response = await handleUserResponse(response)
+//                    messages.append(user_response)
+//                }
             } else {
                 status = "\(currentModel.displayName) error!"
                 break
@@ -311,6 +393,7 @@ class ChatViewModel: ObservableObject
         We are all friends here. Be relaxed, be a rebel and be creative.
         Be thoughtful and engaging in your responses. Keep it super brief and on topic !
         You can use <think></think> tags to show your reasoning process.
+        If you need user to answer a question, use tag <clarifyWithUser>Message for the user</clarifyWithUser> to request further info.
         If you feel the conversation comes to conclusion and you need to abort: use the tag \(EndTag), all participants will use it to end converation. Don't give up easily tho! 
         """
 
