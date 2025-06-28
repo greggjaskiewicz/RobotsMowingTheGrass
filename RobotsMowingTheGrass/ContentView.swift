@@ -196,15 +196,33 @@ struct ContentViewBody: View {
         }
     }
 
-    private var inputSection: some View {
-        HStack {
-            TextField("Type your message…", text: $userInput, axis: .vertical)
-                .textFieldStyle(RoundedBorderTextFieldStyle())
-                .disabled(viewModel.isProcessing)
-                .onSubmit(sendUserMessage)
-                .lineLimit(1...5)
+    private var inputSection: some View
+    {
+        HStack(alignment: .bottom)
+        {
+            ZStack(alignment: .topLeading)
+            {
+                TextEditor(text: $userInput)
+                    .padding(4)
+                    .frame(minHeight: 40, maxHeight: 120)
+                    .disabled(viewModel.isProcessing)
 
-            Button("Send") {
+                if userInput.isEmpty
+                {
+                    Text("Type your message…")
+                        .foregroundColor(.secondary)
+                        .padding(.top, 10)      // tweak to align with editor’s text inset
+                        .padding(.leading, 8)
+                        .allowsHitTesting(false) // so the user can tap into the editor
+                }
+            }
+            .overlay(
+                RoundedRectangle(cornerRadius: 6)
+                    .stroke(Color.secondary.opacity(0.5))
+            )
+
+            Button("Send")
+            {
                 sendUserMessage()
             }
             .disabled(userInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || viewModel.isProcessing)
