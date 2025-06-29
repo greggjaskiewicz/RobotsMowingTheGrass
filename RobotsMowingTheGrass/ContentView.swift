@@ -9,81 +9,67 @@ import SwiftUI
 import Combine
 import UniformTypeIdentifiers
 
-struct ContentView: View {
+struct ContentView: View
+{
     @AppStorage("maxTurns") private var maxTurns: Int = 8
     @AppStorage("infiniteTurns") private var infinite: Bool = false
     @AppStorage("contextTurns") private var contextTurns: Int = 12
 
     @StateObject private var configManager = ModelConfigurationManager()
     @State private var userInput: String = ""
-    @State private var isSaving = false
 
-    var body: some View {
+    var body: some View
+    {
         ContentViewBody(
             configManager: configManager,
             maxTurns: $maxTurns,
             infinite: $infinite,
             contextTurns: $contextTurns,
             userInput: $userInput,
-            isSaving: $isSaving
         )
     }
 }
 
-struct ContentViewBody: View {
+struct ContentViewBody: View
+{
     let configManager: ModelConfigurationManager
     @Binding var maxTurns: Int
     @Binding var infinite: Bool
     @Binding var contextTurns: Int
     @Binding var userInput: String
-    @Binding var isSaving: Bool
-    @State private var selectedExportFormat: UTType = .json
 
     @StateObject private var viewModel: ChatViewModel
     @State private var clarificationResponse: String = ""
+    @State private var showingSettings = false
 
     init(
         configManager: ModelConfigurationManager,
         maxTurns: Binding<Int>,
         infinite: Binding<Bool>,
         contextTurns: Binding<Int>,
-        userInput: Binding<String>,
-        isSaving: Binding<Bool>
-    ) {
+        userInput: Binding<String>
+    )
+    {
         self.configManager = configManager
         self._maxTurns = maxTurns
         self._infinite = infinite
         self._contextTurns = contextTurns
         self._userInput = userInput
-        self._isSaving = isSaving
         self._viewModel = StateObject(wrappedValue: ChatViewModel(configManager: configManager))
     }
 
-    var body: some View {
-        NavigationSplitView {
-            ModelSettingsPanel(
-                maxTurns: $maxTurns,
-                infinite: $infinite,
-                contextTurns: $contextTurns
-            )
-            .environmentObject(configManager)
-        } detail: {
-            VStack(spacing: 0) {
+    var body: some View
+    {
+            VStack(spacing: 0)
+        {
                 controlBar
                 messagesList
                 statusBar
                 Divider()
                 inputSection
             }
-            .fileExporter(
-                isPresented: $isSaving,
-                document: ExportChatDocument(messages: viewModel.messages),
-                contentType: selectedExportFormat,
-                defaultFilename: "LlamasChat"
-            ) { result in
-                handleExportResult(result)
-            }
-            .sheet(isPresented: $viewModel.isClarificationPresented) {
+            .sheet(isPresented: $viewModel.isClarificationPresented)
+        {
                         VStack(spacing: 20) {
                             Text(viewModel.pendingClarificationPrompt ?? "Need your input:")
                                 .font(.headline)
@@ -111,13 +97,36 @@ struct ContentViewBody: View {
                         }
                         .frame(width: 400, height: 200)
                     }
-        }
-        .frame(minWidth: 700, minHeight: 600)
+            .sheet(isPresented: $showingSettings) {
+                VStack {
+                   HStack {
+                       Spacer()
+                       Button("Done") {
+                           showingSettings = false
+                       }
+                       .keyboardShortcut(.cancelAction)
+                   }
+                   .padding()
+
+                    ModelSettingsPanel(
+                        maxTurns: $maxTurns,
+                        infinite: $infinite,
+                        contextTurns: $contextTurns
+                    )
+                    .environmentObject(configManager)
+               }
+                .frame(width: 500, height: 600)
+            }
     }
 
     private var controlBar: some View {
         HStack {
-            Text("Turn: \(viewModel.turnNumber)")
+            Button(action: { showingSettings = true }) {
+                Image(systemName: "slider.horizontal.3")
+                    .font(.title2)  // or .title, .largeTitle
+            }
+            .buttonStyle(PlainButtonStyle())
+                        Text("Turn: \(viewModel.turnNumber)")
                 .font(.caption)
                 .foregroundColor(.secondary)
 
@@ -131,16 +140,10 @@ struct ContentViewBody: View {
             }
 
             Spacer()
-            Picker("", selection: $selectedExportFormat) {
-                Text("JSON").tag(UTType.json)
-                Text("Txt").tag(UTType.plainText)
-                Text("HTML").tag(UTType.html)
-            }
-            .pickerStyle(.segmented)
-            .padding()
-            Spacer()
-            Button("Save As") {
-                isSaving = true
+
+            Button("Save As…")
+            {
+                FileExporterHelper.save(messages: viewModel.messages)
             }
             .disabled(viewModel.messages.isEmpty)
 
@@ -157,30 +160,58 @@ struct ContentViewBody: View {
         .padding([.top, .horizontal])
     }
 
-    private var messagesList: some View {
-        ScrollViewReader { scrollProxy in
-            ScrollView {
-                LazyVStack(alignment: .leading, spacing: 12) {
-                    ForEach(viewModel.displayMessages) { message in
-                        MessageBubble(
-                            message: message,
-                            bubbleColor: viewModel.bubbleColor(for: message)
-                        )
+    @State private var hideCompletedThinking = false
+
+    private var messagesList: some View
+    {
+        VStack(spacing: 0) {
+           HStack {
+               Toggle("Hide completed thinking", isOn: $hideCompletedThinking)
+                   .font(.caption)
+               Spacer()
+           }
+           .padding(.horizontal)
+           .padding(.top, 8)
+
+           Divider()
+
+            ScrollViewReader { scrollProxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 12) {
+                       ForEach(filteredMessages) { message in
+                            MessageBubble(
+                                message: message,
+                                bubbleColor: viewModel.bubbleColor(for: message)
+                            )
+                        }
                     }
+                    .padding()
                 }
-                .padding()
+                .background(Color(NSColor.windowBackgroundColor))
+               .onChange(of: filteredMessages.count) {
+                    scrollToBottom(scrollProxy)
+                }
             }
-            .background(Color(NSColor.windowBackgroundColor))
-            .onChange(of: viewModel.displayMessages.count) {
-                scrollToBottom(scrollProxy)
-            }
-        }
+       }
     }
 
-    private var statusBar: some View {
-        Group {
-            if viewModel.isProcessing || !viewModel.status.isEmpty {
-                HStack {
+    private var filteredMessages: [ChatMessage] {
+        if hideCompletedThinking {
+            return viewModel.displayMessages.filter { message in
+                !message.isThink || message.isStreaming
+            }
+        }
+        return viewModel.displayMessages
+    }
+
+    private var statusBar: some View
+    {
+        Group
+        {
+            if viewModel.isProcessing || !viewModel.status.isEmpty
+            {
+                HStack
+                {
                     if viewModel.isProcessing
                     {
                         ProgressView()
@@ -214,6 +245,11 @@ struct ContentViewBody: View {
                         .padding(.top, 10)      // tweak to align with editor’s text inset
                         .padding(.leading, 8)
                         .allowsHitTesting(false) // so the user can tap into the editor
+                        .onAppear {
+                            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                                NSApp.keyWindow?.makeFirstResponder(nil)
+                            }
+                        }
                 }
             }
             .overlay(

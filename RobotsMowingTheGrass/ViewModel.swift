@@ -149,7 +149,7 @@ class ChatViewModel: ObservableObject
     /// suspends until the user replies, then returns their answer.
     func handleUserResponse(_ response: String) async -> String?
     {
-        guard let tagRange = response.range(of: "<clarifyWithUser>(.*?)</clarifyWithUser>",
+        guard nil != response.range(of: "<clarifyWithUser>(.*?)</clarifyWithUser>",
                                           options: .regularExpression),
             let innerRange = response.range(of: "(?<=<clarifyWithUser>).*?(?=</clarifyWithUser>)",
                                             options: .regularExpression)
@@ -183,23 +183,6 @@ class ChatViewModel: ObservableObject
         return answer
 
     }
-
-//    private func handleUserResponse(_ response: String)
-//    {
-//        if let range = response.range(of: "<clarifyWithUser>(.*?)</clarifyWithUser>", options: .regularExpression)
-//        {
-//            let prompt = String(response[range])
-//            // Extract actual question (strip the tags)
-//            if let questionRange = prompt.range(of: "(?<=<clarifyWithUser>).*?(?=</clarifyWithUser>)", options: .regularExpression)
-//            {
-//                let question = String(prompt[questionRange])
-//
-//
-//               
-//            }
-//        }
-//    }
-
 
     private func runDialogueLoop(firstPrompt: String, models: [ModelConfiguration]) async
     {

@@ -7,16 +7,19 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-struct ExportChatDocument: FileDocument {
+struct ExportChatDocument: FileDocument
+{
     static var readableContentTypes: [UTType] { [.json, .plainText] }
 
     private let chatData: ChatExportData
 
-    init(messages: [ChatMessage]) {
+    init(messages: [ChatMessage])
+    {
         self.chatData = ChatExportData(messages: messages)
     }
 
-    init(configuration: ReadConfiguration) throws {
+    init(configuration: ReadConfiguration) throws
+    {
         guard let data = configuration.file.regularFileContents else {
             throw CocoaError(.fileReadCorruptFile)
         }
@@ -31,11 +34,13 @@ struct ExportChatDocument: FileDocument {
         }
     }
 
-    static var writableContentTypes: [UTType] {
+    static var writableContentTypes: [UTType]
+    {
         [.json, .plainText, .html]
     }
 
-    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper
+    {
         let data: Data
 
         switch configuration.contentType {
@@ -57,20 +62,20 @@ struct ExportChatDocument: FileDocument {
         return FileWrapper(regularFileWithContents: data)
     }
 
-//    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-//        let data: Data
-//
-//        if configuration.contentType == .json {
-//            data = try JSONEncoder().encode(chatData)
-//        } else {
-//            data = chatData.toPlainText().data(using: .utf8) ?? Data()
-//        }
-//
-//        return FileWrapper(regularFileWithContents: data)
-//    }
-
-    func exportAsHTML(to url: URL) throws {
+    func exportAsHTML(to url: URL) throws
+    {
         try htmlRepresentation.write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    func exportasText(to url: URL) throws
+    {
+        try chatData.toPlainText().write(to: url, atomically: true, encoding: .utf8)
+    }
+
+    func exportAsText() -> String?
+    {
+        let plainText = chatData.toPlainText()
+        return plainText
     }
 
     var htmlRepresentation: String {
@@ -122,7 +127,8 @@ struct ExportChatDocument: FileDocument {
         """
     }
 
-    private func escapeHTML(_ input: String) -> String {
+    private func escapeHTML(_ input: String) -> String
+    {
         input
             .replacingOccurrences(of: "&", with: "&amp;")
             .replacingOccurrences(of: "<", with: "&lt;")
@@ -134,13 +140,15 @@ struct ExportChatDocument: FileDocument {
 
 // MARK: - Export Data Structure
 
-private struct ChatExportData: Codable {
+private struct ChatExportData: Codable
+{
     let version: String
     let exportDate: Date
     let messages: [ExportMessage]
     let metadata: ExportMetadata
 
-    init(messages: [ChatMessage]) {
+    init(messages: [ChatMessage])
+    {
         self.version = "2.0" // Updated version for new format
         self.exportDate = Date()
         self.messages = messages.map(ExportMessage.init)
@@ -149,13 +157,18 @@ private struct ChatExportData: Codable {
         var senderCounts: [String: Int] = ["user": 0]
         var thinkingCount = 0
 
-        for message in messages {
-            if message.isUser {
+        for message in messages
+        {
+            if message.isUser
+            {
                 senderCounts["user", default: 0] += 1
-            } else {
+            }
+            else
+            {
                 senderCounts[message.senderName, default: 0] += 1
             }
-            if message.isThink {
+            if message.isThink
+            {
                 thinkingCount += 1
             }
         }
@@ -167,7 +180,8 @@ private struct ChatExportData: Codable {
         )
     }
 
-    init(plainText: String) {
+    init(plainText: String)
+    {
         self.version = "2.0"
         self.exportDate = Date()
         self.messages = []
@@ -178,7 +192,8 @@ private struct ChatExportData: Codable {
         )
     }
 
-    func toPlainText() -> String {
+    func toPlainText() -> String
+    {
         let formatter = DateFormatter()
         formatter.dateStyle = .medium
         formatter.timeStyle = .short
@@ -192,7 +207,8 @@ private struct ChatExportData: Codable {
 
         // Add sender statistics
         output.append("Participants:")
-        for (sender, count) in metadata.senderCounts.sorted(by: { $0.key < $1.key }) {
+        for (sender, count) in metadata.senderCounts.sorted(by: { $0.key < $1.key })
+        {
             output.append("  \(sender): \(count) messages")
         }
         output.append("  Thinking messages: \(metadata.thinkingMessages)")
@@ -200,7 +216,8 @@ private struct ChatExportData: Codable {
         output.append(String(repeating: "=", count: 50))
         output.append("")
 
-        for (index, message) in messages.enumerated() {
+        for (index, message) in messages.enumerated()
+        {
             let turnNumber = index + 1
             let prefix = message.isThink ? "[Thinking] " : ""
 
@@ -213,7 +230,8 @@ private struct ChatExportData: Codable {
     }
 }
 
-private struct ExportMessage: Codable {
+private struct ExportMessage: Codable
+{
     let text: String
     let senderID: String
     let senderName: String
@@ -221,7 +239,8 @@ private struct ExportMessage: Codable {
     let isUser: Bool
     let timestamp: Date
 
-    init(from message: ChatMessage) {
+    init(from message: ChatMessage)
+    {
         self.text = message.text
         self.senderID = message.senderID.uuidString
         self.senderName = message.senderName
@@ -231,7 +250,8 @@ private struct ExportMessage: Codable {
     }
 }
 
-private struct ExportMetadata: Codable {
+private struct ExportMetadata: Codable
+{
     let totalMessages: Int
     let senderCounts: [String: Int]
     let thinkingMessages: Int

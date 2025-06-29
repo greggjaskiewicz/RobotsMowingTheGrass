@@ -162,11 +162,22 @@ struct CodableColor: Codable, Equatable {
     }
 }
 
+extension UUID
+{
+    static var nullId: UUID
+    {
+        get
+        {
+            return UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+        }
+    }
+}
+
 // MARK: - Updated ChatMessage
 
-struct ChatMessage: Identifiable, Equatable
+struct ChatMessage: Identifiable, Equatable, Codable
 {
-    let id = UUID()
+    let id: UUID
     var text: String
     let senderID: UUID  // References ModelConfiguration.id
     let senderName: String
@@ -175,14 +186,24 @@ struct ChatMessage: Identifiable, Equatable
 
     var isUser: Bool
     {
-        senderID == UUID(uuidString: "00000000-0000-0000-0000-000000000000")!
+        senderID == UUID.nullId
+    }
+
+    init(text: String, senderID: UUID, senderName: String, isThink: Bool, isStreaming: Bool)
+    {
+        self.id = UUID()
+        self.text = text
+        self.senderID = senderID
+        self.senderName = senderName
+        self.isThink = isThink
+        self.isStreaming = isStreaming
     }
 
     static func userMessage(text: String) -> ChatMessage
     {
         ChatMessage(
             text: text,
-            senderID: UUID(uuidString: "00000000-0000-0000-0000-000000000000")!,
+            senderID: UUID.nullId,
             senderName: "User",
             isThink: false,
             isStreaming: false
